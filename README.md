@@ -1,8 +1,6 @@
 
 # Sandbox
 
-## About
-
 This library helps to execute PHP code which was provided by a user. I.e. if
 your app wants to provide a scripting feature where the user can provide custom
 PHP code. This library helps to parse this untrusted code and execute it only
