@@ -35,15 +35,15 @@ use PSX\Sandbox\SecurityManagerConfiguration;
  */
 abstract class PHPTestCase extends TestCase
 {
-    public function caseProvider()
+    public static function caseProvider(): array
     {
-        $path  = $this->getDir();
+        $path  = static::getDir();
         $files = scandir($path);
         $data  = [];
 
         foreach ($files as $file) {
             if (substr($file, -5) == '.phpt' && is_file($path . '/' . $file)) {
-                $sections = $this->parseSections($path . '/' . $file);
+                $sections = self::parseSections($path . '/' . $file);
 
                 foreach (['EXPECT', 'OPTIONS'] as $key) {
                     try {
@@ -70,11 +70,7 @@ abstract class PHPTestCase extends TestCase
         return $data;
     }
 
-    /**
-     * @param string $token
-     * @return \PSX\Sandbox\Runtime
-     */
-    protected function newRuntime(string $token, ?array $options) : \PSX\Sandbox\Runtime
+    protected function newRuntime(string $token, ?array $options) : Runtime
     {
         $securityManagerConfig = null;
         if (isset($options['SecurityManager']) && \is_array($options['SecurityManager'])) {
@@ -99,19 +95,14 @@ abstract class PHPTestCase extends TestCase
         return $runtime;
     }
 
-    /**
-     * @return string
-     */
-    abstract protected function getDir();
+    abstract protected static function getDir(): string;
 
     /**
      * Parse phpt files into sections, taken from the official PHP source
      *
      * @see https://github.com/php/php-src/blob/master/run-tests.php
-     * @param string $file
-     * @return array
      */
-    private function parseSections($file)
+    private static function parseSections(string $file): array
     {
         $lines = file($file);
         $sections = [];

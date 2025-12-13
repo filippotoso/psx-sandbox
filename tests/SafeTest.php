@@ -20,6 +20,8 @@
 
 namespace PSX\Sandbox\Tests;
 
+use PHPUnit\Framework\Attributes\DataProvider;
+
 /**
  * SafeTest
  *
@@ -29,9 +31,7 @@ namespace PSX\Sandbox\Tests;
  */
 class SafeTest extends PHPTestCase
 {
-    /**
-     * @dataProvider caseProvider
-     */
+    #[DataProvider('caseProvider')]
     public function testSafe($name, $code, $expect, ?array $options )
     {
         $result = $this->newRuntime(md5($code), $options)->run($code);
@@ -39,7 +39,7 @@ class SafeTest extends PHPTestCase
         $this->assertEquals($expect, $result, $name);
     }
 
-    protected function getDir()
+    protected static function getDir(): string
     {
         return __DIR__ . '/safe';
     }

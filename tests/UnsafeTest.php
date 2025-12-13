@@ -20,6 +20,7 @@
 
 namespace PSX\Sandbox\Tests;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PSX\Sandbox\SecurityException;
 
 /**
@@ -31,9 +32,7 @@ use PSX\Sandbox\SecurityException;
  */
 class UnsafeTest extends PHPTestCase
 {
-    /**
-     * @dataProvider caseProvider
-     */
+    #[DataProvider('caseProvider')]
     public function testSafe($name, $code, $expect, ?array $options)
     {
         $this->expectException(SecurityException::class);
@@ -41,7 +40,7 @@ class UnsafeTest extends PHPTestCase
         $this->newRuntime(md5($code), $options)->run($code);
     }
 
-    protected function getDir()
+    protected static function getDir(): string
     {
         return __DIR__ . '/unsafe';
     }

@@ -31,7 +31,7 @@ class Runtime
 {
     private string $token;
     private Parser $parser;
-    private ?string $cachePath;
+    private string $cachePath;
     private array $context;
 
     /**
