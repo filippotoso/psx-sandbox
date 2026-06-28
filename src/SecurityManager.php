@@ -676,6 +676,54 @@ class SecurityManager
     }
 
     /**
+     * Validates a static method call. {@see pStaticDereferenceLhs} already
+     * gates the *class*, but the method name and arguments were previously
+     * forwarded to the parent pretty-printer untouched. That left any static
+     * method which accepts (and later invokes) a callable completely unguarded
+     * — most dangerously {@see Closure::fromCallable}, which turns an arbitrary
+     * global function name string into an invokable Closure, bypassing
+     * pExpr_FuncCall entirely and yielding a full RCE primitive.
+     *
+     * Each entry below maps a (class, method) pair to the positional argument
+     * that must resolve to an allow-listed function (or be a Closure-typed AST
+     * node). Anything else is rejected, mirroring {@see checkCallable}.
+     *
+     * @throws SecurityException
+     */
+    public function checkStaticCall(string $className, string $methodName, array $arguments = []): void
+    {
+        if (isset($this->classAliases[$className])) {
+            $className = $this->classAliases[$className];
+        }
+
+        $className = ltrim($className, '\\');
+
+        // The class allow-list is enforced by pStaticDereferenceLhs too, but
+        // defend in depth in case the call reaches us through another path.
+        $this->checkClassIsAllowed($className);
+
+        // Static methods on allow-listed classes which accept a user-supplied
+        // callable and turn it into an invokable Closure (or otherwise forward
+        // it). The callback argument must resolve to an allow-listed function
+        // or be a Closure-typed expression; anything else is rejected.
+        $callbackPosition = [
+            'Closure' => ['fromCallable' => 0],
+        ];
+
+        if (!isset($callbackPosition[$className][$methodName])) {
+            return;
+        }
+
+        $pos = $callbackPosition[$className][$methodName];
+        $callable = $this->getPositionalArgument($arguments, $pos);
+        if ($callable instanceof Node\Arg) {
+            $this->checkCallable($callable);
+        } else {
+            throw new SecurityException($className . '::' . $methodName . ' missing callable at position ' . $pos);
+        }
+    }
+
+    /**
      * @throws SecurityException
      */
     public function checkClassIsAllowed(string $className) : void

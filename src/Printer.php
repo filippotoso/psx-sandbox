@@ -83,6 +83,32 @@ class Printer extends Standard
         $this->securityManager->checkMethodCall((string)$name, $node->args);
     }
 
+    protected function pExpr_StaticCall(Expr\StaticCall $node): string
+    {
+        $this->checkStaticCall($node);
+
+        return parent::pExpr_StaticCall($node);
+    }
+
+    /**
+     * Validates a static method call. pStaticDereferenceLhs only gates the
+     * *class*; the method name and arguments were previously forwarded to the
+     * parent pretty-printer untouched, leaving static methods which forward a
+     * callable (e.g. Closure::fromCallable) as an unguarded RCE sink. Dynamic
+     * method names ($cls::$method() / $cls::{'foo'}()) cannot be reasoned about
+     * statically and are rejected outright, mirroring instance calls.
+     */
+    private function checkStaticCall(Expr\StaticCall $node): void
+    {
+        $name = $node->name;
+        if (!$name instanceof Node\Identifier) {
+            throw new SecurityException('Dynamic static method calls are not allowed');
+        }
+
+        $class = $this->p($node->class);
+        $this->securityManager->checkStaticCall($class, (string)$name, $node->args);
+    }
+
     protected function pExpr_Eval(Expr\Eval_ $node): string
     {
         throw new SecurityException('Eval is not allowed');
