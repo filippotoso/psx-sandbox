@@ -67,17 +67,20 @@ class Printer5 extends Standard
     }
 
     /**
-     * Validates an instance method call. Only statically known method names
-     * (Node\Identifier) are inspected; dynamic dispatch such as
-     * $obj->$method() cannot be reasoned about and is left to the caller's
-     * responsibility.
+     * Validates an instance method call. Dynamic dispatch such as
+     * $obj->$method() or $obj->{'uasort'}() cannot be reasoned about, since
+     * the method name is resolved at runtime, so any callable argument it
+     * forwards to would completely bypass the allow-list. Such calls are
+     * rejected outright.
      */
     private function checkMethodCall(Expr\MethodCall|Expr\NullsafeMethodCall $node): void
     {
         $name = $node->name;
-        if ($name instanceof Node\Identifier) {
-            $this->securityManager->checkMethodCall((string)$name, $node->args);
+        if (!$name instanceof Node\Identifier) {
+            throw new SecurityException('Dynamic method calls are not allowed');
         }
+
+        $this->securityManager->checkMethodCall((string)$name, $node->args);
     }
 
     protected function pExpr_Eval(Expr\Eval_ $node): string
