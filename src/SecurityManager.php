@@ -661,6 +661,31 @@ class SecurityManager
             'usort'  => 0,
         ];
 
+        // Filesystem / stream-wrapper write sinks exposed by allow-listed
+        // classes. SimpleXMLElement::asXML() / saveXML() serialise the
+        // in-memory XML tree back out: with no argument they merely return the
+        // document as a string (safe), but with a filename argument they write
+        // it to that path. Because the constructor is *intentionally* allowed
+        // to parse arbitrary attacker-controlled XML, the round-tripped
+        // document can carry a PHP processing instruction verbatim,
+        // so asXML($path) / saveXML($path) is an arbitrary file-write primitive
+        // whose byte content is itself attacker-controlled PHP source — a
+        // direct webshell dropper. The filename is also forwarded to PHP's
+        // stream layer, so `http://`, `ftp://`, `phar://`, `expect://`, ... are
+        // reachable, yielding an outbound SSRF sink as well. There is no safe
+        // filename to allow here (any writable path is an RCE), so the entire
+        // filename-bearing form is rejected.
+        $filesystemWriteMethods = ['asXML', 'saveXML'];
+        if (in_array($methodName, $filesystemWriteMethods, true)) {
+            $target = $this->getPositionalArgument($arguments, 0);
+            if ($target !== null) {
+                throw new SecurityException(
+                    $methodName . '() with a filename argument is not allowed (arbitrary file write / SSRF sink)'
+                );
+            }
+            return;
+        }
+
         if (!isset($callbackPosition[$methodName])) {
             return;
         }

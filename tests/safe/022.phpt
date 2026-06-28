@@ -1,10 +1,9 @@
 --TEST--
-Closure::fromCallable with allow-listed function is permitted
+SimpleXMLElement::asXML() with no argument returns the document as a string
 --FILE--
 <?php
 
-$fn = Closure::fromCallable('strlen');
-return $fn instanceof Closure;
-
+$x = new SimpleXMLElement('<r><a>foo</a></r>');
+return $x->asXML();
 --EXPECT--
-true
+"<?xml version=\"1.0\"?>\n<r><a>foo</a></r>\n"
