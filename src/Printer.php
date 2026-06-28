@@ -52,6 +52,34 @@ class Printer extends Standard
         return parent::pExpr_FuncCall($node);
     }
 
+    protected function pExpr_MethodCall(Expr\MethodCall $node): string
+    {
+        $this->checkMethodCall($node);
+
+        return parent::pExpr_MethodCall($node);
+    }
+
+    protected function pExpr_NullsafeMethodCall(Expr\NullsafeMethodCall $node): string
+    {
+        $this->checkMethodCall($node);
+
+        return parent::pExpr_NullsafeMethodCall($node);
+    }
+
+    /**
+     * Validates an instance method call. Only statically known method names
+     * (Node\Identifier) are inspected; dynamic dispatch such as
+     * $obj->$method() cannot be reasoned about and is left to the caller's
+     * responsibility.
+     */
+    private function checkMethodCall(Expr\MethodCall|Expr\NullsafeMethodCall $node): void
+    {
+        $name = $node->name;
+        if ($name instanceof Node\Identifier) {
+            $this->securityManager->checkMethodCall((string)$name, $node->args);
+        }
+    }
+
     protected function pExpr_Eval(Expr\Eval_ $node): string
     {
         throw new SecurityException('Eval is not allowed');

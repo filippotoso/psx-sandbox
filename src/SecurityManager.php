@@ -643,6 +643,39 @@ class SecurityManager
     }
 
     /**
+     * Validates an instance method call. Mirrors the array-callback guards of
+     * {@see checkFunctionCall}: several allow-listed classes (e.g. ArrayObject,
+     * ArrayIterator) expose methods which accept a callable that can resolve to
+     * any global function. Without this check an attacker can smuggle a
+     * forbidden function name (such as "system") through as a method argument,
+     * bypassing pExpr_FuncCall entirely.
+     *
+     * @throws SecurityException
+     */
+    public function checkMethodCall(string $methodName, array $arguments = []): void
+    {
+        // methods exposed by allow-listed classes which invoke a user supplied
+        // callable with the object's payload, i.e. they are the method-level
+        // equivalent of array_map / usort / uasort / uksort
+        $callbackPosition = [
+            'uasort' => 0,
+            'uksort' => 0,
+            'usort'  => 0,
+        ];
+
+        if (!isset($callbackPosition[$methodName])) {
+            return;
+        }
+
+        $callable = $this->getPositionalArgument($arguments, $callbackPosition[$methodName]);
+        if ($callable instanceof Node\Arg) {
+            $this->checkCallable($callable);
+        } else {
+            throw new SecurityException($methodName . ' missing callable at position ' . $callbackPosition[$methodName]);
+        }
+    }
+
+    /**
      * @throws SecurityException
      */
     public function checkClassIsAllowed(string $className) : void
@@ -726,5 +759,20 @@ class SecurityManager
         }
 
         return $nodes[$pos] ?? null;
+    }
+
+    /**
+     * Returns the argument at the given positional index, ignoring any non
+     * argument nodes. Unlike {@see getArgumentAt} this does not depend on
+     * reflection, so it can be used for method calls whose declaring class is
+     * not statically known.
+     */
+    private function getPositionalArgument(array $nodes, int $pos): ?Node\Arg
+    {
+        $args = array_values(array_filter($nodes, function ($node) {
+            return $node instanceof Node\Arg;
+        }));
+
+        return $args[$pos] ?? null;
     }
 }
