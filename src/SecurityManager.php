@@ -52,7 +52,6 @@ class SecurityManager
         'interface_exists',
         'trait_exists',
         'function_exists',
-        'class_alias',
         'is_subclass_of',
         'is_a',
         'get_class_vars',
@@ -485,7 +484,6 @@ class SecurityManager
         'SimpleXMLElement',
         'SimpleXMLIterator',
         'NumberFormatter',
-        'Swift_Message',
     ];
 
     private array $functionAliases = [];
@@ -578,7 +576,7 @@ class SecurityManager
 
         $functionName = ltrim($functionName, '\\');
 
-        if (!in_array($functionName, $this->allowedFunctions)) {
+        if (!in_array($functionName, $this->allowedFunctions, true)) {
             throw new SecurityException('Call to a not allowed function ' . $functionName);
         }
 
@@ -734,7 +732,7 @@ class SecurityManager
 
         $className = ltrim($className, '\\');
 
-        if (!in_array($className, $this->allowedClasses)) {
+        if (!in_array($className, $this->allowedClasses, true)) {
             throw new SecurityException('Call to a not allowed class ' . $className);
         }
     }
