@@ -692,6 +692,93 @@ class SecurityManager
     }
 
     /**
+     * Validates the constructor arguments of an allow-listed class.
+     *
+     * {@see checkClassIsAllowed} only verifies the class name; the constructor
+     * arguments are forwarded to the parent pretty-printer untouched, which
+     * means any allow-listed class whose constructor is itself a dangerous sink
+     * can be instantiated with attacker-controlled arguments. The most pressing
+     * case is {@see SimpleXMLElement} / {@see SimpleXMLIterator}: their
+     * constructor parses XML and, when the options bitmask enables external
+     * entity substitution / DTD loading, yields an XXE, while the 3rd argument
+     * ($data_is_url) turns the 1st argument into a URL fetched by the host
+     * (SSRF). Those argument patterns are rejected here.
+     *
+     * @throws SecurityException
+     */
+    public function checkConstructorCall(string $className, array $arguments = []): void
+    {
+        if (isset($this->classAliases[$className])) {
+            $className = $this->classAliases[$className];
+        }
+
+        $className = ltrim($className, '\\');
+
+        if (in_array($className, ['SimpleXMLElement', 'SimpleXMLIterator'], true)) {
+            $this->checkSimpleXmlArguments($arguments);
+        }
+    }
+
+    /**
+     * Rejects the XXE / SSRF argument patterns of SimpleXMLElement /
+     * SimpleXMLIterator constructors:
+     *  - the options bitmask (positional arg #1) containing LIBXML_NOENT,
+     *    LIBXML_DTDLOAD, LIBXML_DTDATTR or LIBXML_DTDVALID, and
+     *  - the $data_is_url flag (positional arg #2) being truthy.
+     *
+     * Only literal argument values can be reasoned about statically. A
+     * non-literal expression in either of those positions cannot be verified
+     * to be safe, so it is rejected outright (defence in depth: the rewritten
+     * file is attacker-controlled input, so being conservative is correct).
+     *
+     * @throws SecurityException
+     */
+    private function checkSimpleXmlArguments(array $arguments): void
+    {
+        $dangerousConstants = [
+            'LIBXML_NOENT',
+            'LIBXML_DTDLOAD',
+            'LIBXML_DTDATTR',
+            'LIBXML_DTDVALID',
+        ];
+        $dangerousMask = \LIBXML_NOENT | \LIBXML_DTDLOAD | \LIBXML_DTDATTR | \LIBXML_DTDVALID;
+
+        $options = $this->getPositionalArgument($arguments, 1);
+        if ($options instanceof Node\Arg) {
+            $value = $options->value;
+            if ($value instanceof Node\Expr\ConstFetch) {
+                $name = ltrim($value->name->toString(), '\\');
+                if (in_array($name, $dangerousConstants, true)) {
+                    throw new SecurityException('SimpleXML constructor options must not enable external entities / DTD loading: ' . $name);
+                }
+            } elseif ($value instanceof Node\Scalar\LNumber) {
+                if (($value->value & $dangerousMask) !== 0) {
+                    throw new SecurityException('SimpleXML constructor options must not enable external entities / DTD loading');
+                }
+            } elseif (!$value instanceof Node\Scalar) {
+                throw new SecurityException('SimpleXML constructor options must be a literal value');
+            }
+        }
+
+        $dataIsUrl = $this->getPositionalArgument($arguments, 2);
+        if ($dataIsUrl instanceof Node\Arg) {
+            $value = $dataIsUrl->value;
+            if ($value instanceof Node\Expr\ConstFetch) {
+                $name = strtolower($value->name->toString());
+                if ($name === 'true') {
+                    throw new SecurityException('SimpleXML constructor must not be pointed at a URL (SSRF)');
+                }
+            } elseif ($value instanceof Node\Scalar\LNumber) {
+                if ($value->value !== 0) {
+                    throw new SecurityException('SimpleXML constructor must not be pointed at a URL (SSRF)');
+                }
+            } elseif (!$value instanceof Node\Scalar) {
+                throw new SecurityException('SimpleXML data_is_url argument must be a literal value');
+            }
+        }
+    }
+
+    /**
      * @throws SecurityException
      */
     private function checkCallable(Node\Arg $callable)

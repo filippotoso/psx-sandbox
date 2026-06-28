@@ -110,6 +110,7 @@ class Printer5 extends Standard
         $class = $this->p($node->class);
 
         $this->securityManager->checkClassIsAllowed($class);
+        $this->securityManager->checkConstructorCall($class, $node->args);
 
         return parent::pExpr_New($node);
     }
