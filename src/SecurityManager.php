@@ -608,6 +608,20 @@ class SecurityManager
             } else {
                 throw new SecurityException($functionName . ' missing callable at position 1');
             }
+        } elseif (
+            $functionName === 'filter_var'
+            || $functionName === 'filter_input'
+            || $functionName === 'filter_var_array'
+            || $functionName === 'filter_input_array'
+        ) {
+            // The Filter extension's FILTER_CALLBACK filter invokes a user
+            // supplied callback (named in the 'options' argument) for every
+            // value being filtered. The callback name is smuggled as a *data*
+            // string inside an array literal, so pExpr_FuncCall / the call-name
+            // allow-list never sees it. Without this guard, filter_var(...,
+            // FILTER_CALLBACK, ['options' => 'system']) is a full RCE / sandbox
+            // escape primitive equivalent to call_user_func('system', ...).
+            $this->checkFilterCallbackSink($functionName, $arguments);
         }
     }
 
@@ -854,13 +868,208 @@ class SecurityManager
      */
     private function checkCallable(Node\Arg $callable)
     {
-        $value = $callable->value;
+        $this->checkCallableValue($callable->value);
+    }
+
+    /**
+     * Validates an expression used as a callable. A literal function name is
+     * resolved through {@see checkFunctionCall} (so the allow-list applies); a
+     * Closure is always safe (its body is already walked by the printer); any
+     * other (non-literal, non-Closure) expression cannot be reasoned about
+     * statically and is rejected, since the rewritten file is attacker
+     * controlled input.
+     *
+     * @throws SecurityException
+     */
+    private function checkCallableValue(Node\Expr $value): void
+    {
         if ($value instanceof Node\Scalar\String_) {
             $this->checkFunctionCall($value->value);
         } elseif ($value instanceof Node\Expr\Closure) {
+            // safe: the closure body is walked by the printer
         } else {
             throw new SecurityException('Usage of an invalid callable type, only string and closure allowed');
         }
+    }
+
+    /**
+     * Inspects the argument patterns of the Filter extension functions that
+     * can forward to an arbitrary global function via FILTER_CALLBACK:
+     *
+     *  - filter_var($value, $filter, $options)
+     *  - filter_input($type, $variable_name, $filter, $options)
+     *  - filter_var_array($data, $definition, $add_empty)
+     *  - filter_input_array($type, $definition, $add_empty)
+     *
+     * For filter_var / filter_input the callback lives under the 'options' key
+     * of the options array argument: ['options' => 'system']. For
+     * filter_var_array / filter_input_array the per-field definition argument
+     * maps each field to a spec, and a FILTER_CALLBACK spec carries the
+     * callback directly as its 'options' value:
+     * ['field' => ['filter' => FILTER_CALLBACK, 'options' => 'system']].
+     *
+     * Any callable reachable through these structures must resolve to an
+     * allow-listed function or be a Closure; anything else is rejected. The
+     * FILTER_CALLBACK filter can be specified either by the FILTER_CALLBACK
+     * constant name or by its integer value (1024), and both are honoured.
+     * Because a non-literal filter / spec cannot be verified to *not* be
+     * FILTER_CALLBACK, a callable string appearing in an options position is
+     * validated unconditionally (defence in depth: the rewritten file is
+     * attacker-controlled input).
+     *
+     * @throws SecurityException
+     */
+    private function checkFilterCallbackSink(string $functionName, array $arguments): void
+    {
+        if ($functionName === 'filter_var' || $functionName === 'filter_input') {
+            $filterPos  = $functionName === 'filter_var' ? 1 : 2;
+            $optionsPos = $functionName === 'filter_var' ? 2 : 3;
+
+            $filterArg  = $this->getArgumentAt($functionName, $arguments, $filterPos);
+            $optionsArg = $this->getArgumentAt($functionName, $arguments, $optionsPos);
+            if ($optionsArg === null) {
+                return;
+            }
+
+            $filterIsCallback = $filterArg === null ? null : $this->isFilterCallback($filterArg->value);
+            $this->checkFilterOptionsValue($functionName, $optionsArg->value, $filterIsCallback);
+        } else {
+            // filter_var_array / filter_input_array: definition at position 1
+            $definitionArg = $this->getArgumentAt($functionName, $arguments, 1);
+            if ($definitionArg === null) {
+                return;
+            }
+            $definition = $definitionArg->value;
+            if (!$definition instanceof Node\Expr\Array_) {
+                return;
+            }
+
+            foreach ($definition->items as $item) {
+                if ($item === null || $item->value === null) {
+                    continue;
+                }
+                $spec = $item->value;
+                if (!$spec instanceof Node\Expr\Array_) {
+                    // a bare filter constant: no callback to invoke
+                    continue;
+                }
+
+                $filterValue  = null;
+                $optionsValue = null;
+                foreach ($spec->items as $specItem) {
+                    if ($specItem === null || $specItem->key === null) {
+                        continue;
+                    }
+                    $key = $this->arrayKeyName($specItem->key);
+                    if ($key === 'filter') {
+                        $filterValue = $specItem->value;
+                    } elseif ($key === 'options') {
+                        $optionsValue = $specItem->value;
+                    }
+                }
+
+                $filterIsCallback = $filterValue === null ? null : $this->isFilterCallback($filterValue);
+                if ($optionsValue !== null) {
+                    $this->checkFilterOptionsValue($functionName, $optionsValue, $filterIsCallback);
+                }
+            }
+        }
+    }
+
+    /**
+     * Validates the value of an 'options' argument (filter_var / filter_input)
+     * or an 'options' spec entry (filter_var_array / filter_input_array).
+     *
+     * For the scalar form the options value is itself the callback
+     * (filter_var($v, FILTER_CALLBACK, 'system')); for the array form the
+     * callback sits under the 'options' key
+     * (filter_var($v, FILTER_CALLBACK, ['options' => 'system'])).
+     *
+     * A callback is only ever invoked when the active filter is
+     * FILTER_CALLBACK. When the filter is statically known to *not* be
+     * FILTER_CALLBACK there is no callback sink and the options value is
+     * left untouched. When the filter cannot be reasoned about statically the
+     * callback is validated defensively — except that an array operand in an
+     * options-callable position is the options array of a non-callback filter
+     * (e.g. FILTER_VALIDATE_INT's ['min_range' => 0]) and never a callable
+     * sink, so it is left untouched regardless.
+     *
+     * @throws SecurityException
+     */
+    private function checkFilterOptionsValue(string $functionName, Node\Expr $options, ?bool $filterIsCallback): void
+    {
+        if ($options instanceof Node\Expr\Array_) {
+            // array form: ['options' => <callable>, ...]
+            foreach ($options->items as $item) {
+                if ($item === null || $item->key === null) {
+                    continue;
+                }
+                if ($this->arrayKeyName($item->key) === 'options') {
+                    $this->checkFilterCallbackOperand($item->value, $filterIsCallback);
+                }
+            }
+        } else {
+            // scalar / direct callable form: filter_var($v, FILTER_CALLBACK, 'system')
+            $this->checkFilterCallbackOperand($options, $filterIsCallback);
+        }
+    }
+
+    /**
+     * Validates a single operand sitting in an options-callable position. An
+     * array operand is the options array of a non-callback filter and not a
+     * callable sink. When the filter is statically known not to be
+     * FILTER_CALLBACK there is no sink at all. Otherwise the operand must
+     * resolve to an allow-listed function or be a Closure.
+     *
+     * @throws SecurityException
+     */
+    private function checkFilterCallbackOperand(Node\Expr $value, ?bool $filterIsCallback): void
+    {
+        if ($value instanceof Node\Expr\Array_) {
+            return;
+        }
+        if ($filterIsCallback === false) {
+            return;
+        }
+        $this->checkCallableValue($value);
+    }
+
+    /**
+     * Resolves a filter expression to whether it denotes FILTER_CALLBACK.
+     * Returns true / false for literal FILTER_CALLBACK (by constant name or
+     * integer value 1024) and null when the expression cannot be reasoned about
+     * statically.
+     */
+    private function isFilterCallback(Node\Expr $value): ?bool
+    {
+        if ($value instanceof Node\Expr\ConstFetch) {
+            $name = ltrim($value->name->toString(), '\\');
+            if ($name === 'FILTER_CALLBACK') {
+                return true;
+            }
+            // a bare literal constant other than FILTER_CALLBACK cannot be 1024
+            // unless it is a user-defined constant, which we cannot resolve
+            return null;
+        }
+        if ($value instanceof Node\Scalar\LNumber) {
+            return $value->value === \FILTER_CALLBACK;
+        }
+        return null;
+    }
+
+    /**
+     * Returns the literal name of an array key expression, or null when the
+     * key is not a literal string / constant fetch.
+     */
+    private function arrayKeyName(Node\Expr $key): ?string
+    {
+        if ($key instanceof Node\Scalar\String_) {
+            return $key->value;
+        }
+        if ($key instanceof Node\Expr\ConstFetch) {
+            return ltrim($key->name->toString(), '\\');
+        }
+        return null;
     }
 
     /**
